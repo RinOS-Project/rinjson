@@ -45,7 +45,7 @@ RinJsonCStatus rin_json_c_consume(RinJsonCReader* reader, char expected);
 
 /* Return the lexical contents between quotes. JSON escapes remain encoded in
  * the returned span, but the complete string and UTF-8/Unicode escape form is
- * validated. */
+ * validated. On failure span_out is cleared. */
 RinJsonCStatus rin_json_c_read_string_span(
     RinJsonCReader* reader, RinJsonCSpan* span_out);
 
@@ -57,13 +57,14 @@ RinJsonCStatus rin_json_c_read_ascii_string(
     uint32_t* bytes_out);
 
 /* Read an unsigned JSON integer with no sign, fraction, exponent, or leading
- * zero. The delimiter remains for the caller's structural parser. */
+ * zero. The delimiter remains for the caller's structural parser. On failure
+ * value_out is set to zero. */
 RinJsonCStatus rin_json_c_read_u32(
     RinJsonCReader* reader, uint32_t* value_out);
 
 /* Validate and consume one complete JSON value, returning its borrowed raw
  * span. Objects and arrays are recursively checked under max_depth and all
- * values/keys count against max_tokens. */
+ * values/keys count against max_tokens. On failure span_out is cleared. */
 RinJsonCStatus rin_json_c_skip_value(
     RinJsonCReader* reader, RinJsonCSpan* span_out);
 
