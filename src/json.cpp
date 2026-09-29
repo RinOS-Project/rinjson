@@ -30,6 +30,23 @@ template<typename Exception>
 #endif
 }
 
+template<typename Callback, typename... Args>
+bool invokeStreamCallback(Callback callback, Args&&... args) noexcept {
+    if (callback == nullptr) return true;
+#if defined(__cpp_exceptions) || defined(__EXCEPTIONS)
+    try {
+#endif
+        return callback(std::forward<Args>(args)...);
+#if defined(__cpp_exceptions) || defined(__EXCEPTIONS)
+    } catch (...) {
+        /* A public consumer callback is equivalent to a rejected event when
+         * it throws; parser control and partial consumer state must not be
+         * unwound through an untrusted callback. */
+        return false;
+    }
+#endif
+}
+
 bool hexDigit(char c, unsigned& value) {
     if (c >= '0' && c <= '9') value = static_cast<unsigned>(c - '0');
     else if (c >= 'a' && c <= 'f') value = static_cast<unsigned>(c - 'a' + 10);
@@ -488,19 +505,17 @@ private:
     }
 
     void event(bool (*callback)(void*), const char* message) {
-        if (callback != nullptr && !callback(callbacks_.context))
+        if (!invokeStreamCallback(callback, callbacks_.context))
             fail(input_, position_, message);
     }
 
     void boolean(bool value) {
-        if (callbacks_.onBoolean != nullptr &&
-            !callbacks_.onBoolean(callbacks_.context, value))
+        if (!invokeStreamCallback(callbacks_.onBoolean, callbacks_.context, value))
             fail(input_, position_, "JSON stream callback rejected boolean");
     }
 
     void numberEvent(std::string_view token) {
-        if (callbacks_.onNumber != nullptr &&
-            !callbacks_.onNumber(callbacks_.context, token))
+        if (!invokeStreamCallback(callbacks_.onNumber, callbacks_.context, token))
             fail(input_, position_, "JSON stream callback rejected number");
     }
 
@@ -556,8 +571,7 @@ private:
         while (position_ < input_.size()) {
             const unsigned char character = static_cast<unsigned char>(input_[position_++]);
             if (character == '"') {
-                if (callbacks_.onString != nullptr &&
-                    !callbacks_.onString(callbacks_.context,
+                if (!invokeStreamCallback(callbacks_.onString, callbacks_.context,
                         input_.substr(tokenStart, position_ - tokenStart - 1u), isKey))
                     fail(input_, position_, "JSON stream callback rejected string");
                 return;
