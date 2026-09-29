@@ -3,6 +3,9 @@
 
 #include <cctype>
 #include <limits>
+#if defined(__cpp_exceptions) || defined(__EXCEPTIONS) || defined(_CPPUNWIND)
+#    include <new>
+#endif
 
 namespace rinjson {
 namespace {
@@ -115,6 +118,10 @@ bool parseOciImageManifest(std::string_view input, OciImageManifest& output,
         return true;
     } catch (const Error&) {
         return false;
+#if defined(__cpp_exceptions) || defined(__EXCEPTIONS) || defined(_CPPUNWIND)
+    } catch (const std::bad_alloc&) {
+        return false;
+#endif
     }
 }
 
