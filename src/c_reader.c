@@ -480,6 +480,14 @@ RinJsonCStatus rin_json_c_read_u32(
         reader->tokens = saved_tokens;
         return RIN_JSON_C_MALFORMED;
     }
+    if (reader->offset < reader->length &&
+        (reader->bytes[reader->offset] == '.' ||
+         reader->bytes[reader->offset] == 'e' ||
+         reader->bytes[reader->offset] == 'E')) {
+        reader->offset = saved_offset;
+        reader->tokens = saved_tokens;
+        return RIN_JSON_C_MALFORMED;
+    }
     *value_out = value;
     return RIN_JSON_C_OK;
 }
