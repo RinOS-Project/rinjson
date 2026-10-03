@@ -38,12 +38,55 @@ bool safeString(const Value* value, std::string& output,
     return true;
 }
 
-bool sha256Digest(const std::string& value) {
-    if (value.size() != 71u || value.compare(0u, 7u, "sha256:") != 0)
+bool digestSyntax(const std::string& value) {
+    const std::size_t separator = value.find(':');
+    if (separator == std::string::npos || separator == 0u ||
+        separator + 1u >= value.size())
         return false;
-    for (std::size_t index = 7u; index < value.size(); ++index) {
-        const unsigned char character = static_cast<unsigned char>(value[index]);
-        if (!std::isxdigit(character)) return false;
+
+    const auto algorithmComponent = [](std::string_view component) {
+        if (component.empty()) return false;
+        for (const unsigned char character : component) {
+            if (!((character >= 'a' && character <= 'z') ||
+                  (character >= '0' && character <= '9')))
+                return false;
+        }
+        return true;
+    };
+    std::size_t componentStart = 0u;
+    for (std::size_t index = 0u; index <= separator; ++index) {
+        if (index != separator && value[index] != '+' && value[index] != '.' &&
+            value[index] != '_' && value[index] != '-')
+            continue;
+        if (!algorithmComponent(std::string_view(value).substr(
+                componentStart, index - componentStart)))
+            return false;
+        componentStart = index + 1u;
+    }
+
+    const std::string_view encoded(value.data() + separator + 1u,
+                                   value.size() - separator - 1u);
+    for (const unsigned char character : encoded) {
+        if (!((character >= 'a' && character <= 'z') ||
+              (character >= 'A' && character <= 'Z') ||
+              (character >= '0' && character <= '9') || character == '=' ||
+              character == '_' || character == '-'))
+            return false;
+    }
+
+    const std::string_view algorithm(value.data(), separator);
+    if (algorithm == "sha256" || algorithm == "blake3") {
+        if (encoded.size() != 64u) return false;
+        for (const unsigned char character : encoded)
+            if (!((character >= '0' && character <= '9') ||
+                  (character >= 'a' && character <= 'f')))
+                return false;
+    } else if (algorithm == "sha512") {
+        if (encoded.size() != 128u) return false;
+        for (const unsigned char character : encoded)
+            if (!((character >= '0' && character <= '9') ||
+                  (character >= 'a' && character <= 'f')))
+                return false;
     }
     return true;
 }
@@ -56,7 +99,7 @@ bool descriptor(const Value& value, OciDescriptor& output,
                     limits.maxStringBytes, true) ||
         !safeString(field(value, "digest"), parsed.digest,
                     limits.maxStringBytes, true) ||
-        !sha256Digest(parsed.digest) ||
+        !digestSyntax(parsed.digest) ||
         !unsignedValue(field(value, "size"), parsed.size))
         return false;
     output = std::move(parsed);
