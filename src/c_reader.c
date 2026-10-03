@@ -9,6 +9,14 @@ static int json_is_space(char value)
     return value == ' ' || value == '\t' || value == '\r' || value == '\n';
 }
 
+static int json_reader_state_valid(const RinJsonCReader* reader)
+{
+    return reader != NULL && reader->bytes != NULL && reader->length != 0u &&
+           reader->offset <= reader->length && reader->max_depth != 0u &&
+           reader->max_tokens != 0u && reader->max_string_bytes != 0u &&
+           reader->tokens <= reader->max_tokens;
+}
+
 static int json_hex(char value, uint32_t* digit_out)
 {
     if (value >= '0' && value <= '9') *digit_out = (uint32_t)(value - '0');
@@ -247,7 +255,7 @@ static RinJsonCStatus json_skip_value_internal(
     uint32_t start;
     char value;
 
-    if (reader == NULL) return RIN_JSON_C_INVALID_ARGUMENT;
+    if (!json_reader_state_valid(reader)) return RIN_JSON_C_INVALID_ARGUMENT;
     rin_json_c_skip_space(reader);
     if (reader->offset >= reader->length) return RIN_JSON_C_MALFORMED;
     if (depth > reader->max_depth) return RIN_JSON_C_CAPACITY;
@@ -334,7 +342,7 @@ RinJsonCStatus rin_json_c_reader_init(
 
 void rin_json_c_skip_space(RinJsonCReader* reader)
 {
-    if (reader == NULL) return;
+    if (!json_reader_state_valid(reader)) return;
     while (reader->offset < reader->length &&
            json_is_space(reader->bytes[reader->offset]))
         ++reader->offset;
@@ -343,7 +351,7 @@ void rin_json_c_skip_space(RinJsonCReader* reader)
 RinJsonCStatus rin_json_c_consume(RinJsonCReader* reader, char expected)
 {
     uint32_t saved_offset;
-    if (reader == NULL) return RIN_JSON_C_INVALID_ARGUMENT;
+    if (!json_reader_state_valid(reader)) return RIN_JSON_C_INVALID_ARGUMENT;
     saved_offset = reader->offset;
     rin_json_c_skip_space(reader);
     if (reader->offset >= reader->length ||
@@ -362,7 +370,8 @@ RinJsonCStatus rin_json_c_read_string_span(
     uint32_t saved_tokens;
     RinJsonCStatus status;
     if (span_out != NULL) *span_out = (RinJsonCSpan){0};
-    if (reader == NULL || span_out == NULL) return RIN_JSON_C_INVALID_ARGUMENT;
+    if (span_out == NULL || !json_reader_state_valid(reader))
+        return RIN_JSON_C_INVALID_ARGUMENT;
     saved_offset = reader->offset;
     saved_tokens = reader->tokens;
     status = json_token(reader);
@@ -386,7 +395,7 @@ RinJsonCStatus rin_json_c_read_ascii_string(
     uint32_t index;
 
     if (bytes_out != NULL) *bytes_out = 0u;
-    if (reader == NULL || output == NULL || capacity == 0u)
+    if (output == NULL || capacity == 0u || !json_reader_state_valid(reader))
         return RIN_JSON_C_INVALID_ARGUMENT;
     saved_offset = reader->offset;
     saved_tokens = reader->tokens;
@@ -423,7 +432,8 @@ RinJsonCStatus rin_json_c_read_u32(
     RinJsonCStatus status;
 
     if (value_out != NULL) *value_out = 0u;
-    if (reader == NULL || value_out == NULL) return RIN_JSON_C_INVALID_ARGUMENT;
+    if (value_out == NULL || !json_reader_state_valid(reader))
+        return RIN_JSON_C_INVALID_ARGUMENT;
     saved_offset = reader->offset;
     saved_tokens = reader->tokens;
     rin_json_c_skip_space(reader);
@@ -481,7 +491,7 @@ RinJsonCStatus rin_json_c_skip_value(
     uint32_t saved_tokens;
     RinJsonCStatus status;
     if (span_out != NULL) *span_out = (RinJsonCSpan){0};
-    if (reader == NULL) return json_skip_value_internal(NULL, 0u, span_out);
+    if (!json_reader_state_valid(reader)) return RIN_JSON_C_INVALID_ARGUMENT;
     saved_offset = reader->offset;
     saved_tokens = reader->tokens;
     status = json_skip_value_internal(reader, 0u, span_out);
@@ -495,7 +505,7 @@ RinJsonCStatus rin_json_c_skip_value(
 RinJsonCStatus rin_json_c_document_complete(RinJsonCReader* reader)
 {
     uint32_t saved_offset;
-    if (reader == NULL) return RIN_JSON_C_INVALID_ARGUMENT;
+    if (!json_reader_state_valid(reader)) return RIN_JSON_C_INVALID_ARGUMENT;
     saved_offset = reader->offset;
     rin_json_c_skip_space(reader);
     if (reader->offset != reader->length) {
