@@ -342,11 +342,15 @@ void rin_json_c_skip_space(RinJsonCReader* reader)
 
 RinJsonCStatus rin_json_c_consume(RinJsonCReader* reader, char expected)
 {
+    uint32_t saved_offset;
     if (reader == NULL) return RIN_JSON_C_INVALID_ARGUMENT;
+    saved_offset = reader->offset;
     rin_json_c_skip_space(reader);
     if (reader->offset >= reader->length ||
-        reader->bytes[reader->offset] != expected)
+        reader->bytes[reader->offset] != expected) {
+        reader->offset = saved_offset;
         return RIN_JSON_C_MALFORMED;
+    }
     ++reader->offset;
     return RIN_JSON_C_OK;
 }
@@ -354,12 +358,21 @@ RinJsonCStatus rin_json_c_consume(RinJsonCReader* reader, char expected)
 RinJsonCStatus rin_json_c_read_string_span(
     RinJsonCReader* reader, RinJsonCSpan* span_out)
 {
+    uint32_t saved_offset;
+    uint32_t saved_tokens;
     RinJsonCStatus status;
     if (span_out != NULL) *span_out = (RinJsonCSpan){0};
     if (reader == NULL || span_out == NULL) return RIN_JSON_C_INVALID_ARGUMENT;
+    saved_offset = reader->offset;
+    saved_tokens = reader->tokens;
     status = json_token(reader);
     if (status != RIN_JSON_C_OK) return status;
-    return json_read_string_span_no_token(reader, span_out);
+    status = json_read_string_span_no_token(reader, span_out);
+    if (status != RIN_JSON_C_OK) {
+        reader->offset = saved_offset;
+        reader->tokens = saved_tokens;
+    }
+    return status;
 }
 
 RinJsonCStatus rin_json_c_read_ascii_string(
@@ -368,20 +381,29 @@ RinJsonCStatus rin_json_c_read_ascii_string(
 {
     RinJsonCSpan span;
     RinJsonCStatus status;
+    uint32_t saved_offset;
+    uint32_t saved_tokens;
     uint32_t index;
 
     if (bytes_out != NULL) *bytes_out = 0u;
     if (reader == NULL || output == NULL || capacity == 0u)
         return RIN_JSON_C_INVALID_ARGUMENT;
+    saved_offset = reader->offset;
+    saved_tokens = reader->tokens;
     output[0] = '\0';
     status = rin_json_c_read_string_span(reader, &span);
     if (status != RIN_JSON_C_OK) return status;
-    if (span.size == UINT32_MAX || span.size >= capacity)
+    if (span.size == UINT32_MAX || span.size >= capacity) {
+        reader->offset = saved_offset;
+        reader->tokens = saved_tokens;
         return RIN_JSON_C_CAPACITY;
+    }
     for (index = 0u; index < span.size; ++index) {
         const unsigned char value = (unsigned char)span.data[index];
         if (value < 0x20u || value > 0x7eu || value == '\\') {
             output[0] = '\0';
+            reader->offset = saved_offset;
+            reader->tokens = saved_tokens;
             return RIN_JSON_C_MALFORMED;
         }
         output[index] = (char)value;
@@ -396,38 +418,58 @@ RinJsonCStatus rin_json_c_read_u32(
 {
     uint32_t value = 0u;
     uint32_t digits = 0u;
+    uint32_t saved_offset;
+    uint32_t saved_tokens;
     RinJsonCStatus status;
 
     if (value_out != NULL) *value_out = 0u;
     if (reader == NULL || value_out == NULL) return RIN_JSON_C_INVALID_ARGUMENT;
+    saved_offset = reader->offset;
+    saved_tokens = reader->tokens;
     rin_json_c_skip_space(reader);
     if (reader->offset >= reader->length ||
         reader->bytes[reader->offset] < '0' ||
-        reader->bytes[reader->offset] > '9')
+        reader->bytes[reader->offset] > '9') {
+        reader->offset = saved_offset;
         return RIN_JSON_C_MALFORMED;
+    }
     status = json_token(reader);
-    if (status != RIN_JSON_C_OK) return status;
+    if (status != RIN_JSON_C_OK) {
+        reader->offset = saved_offset;
+        reader->tokens = saved_tokens;
+        return status;
+    }
     if (reader->bytes[reader->offset] == '0') {
         ++reader->offset;
         digits = 1u;
         if (reader->offset < reader->length &&
             reader->bytes[reader->offset] >= '0' &&
-            reader->bytes[reader->offset] <= '9')
+            reader->bytes[reader->offset] <= '9') {
+            reader->offset = saved_offset;
+            reader->tokens = saved_tokens;
             return RIN_JSON_C_MALFORMED;
+        }
     } else {
         while (reader->offset < reader->length &&
                reader->bytes[reader->offset] >= '0' &&
                reader->bytes[reader->offset] <= '9') {
             const uint32_t digit =
                 (uint32_t)(reader->bytes[reader->offset] - '0');
-            if (value > (UINT32_MAX - digit) / 10u)
+            if (value > (UINT32_MAX - digit) / 10u) {
+                reader->offset = saved_offset;
+                reader->tokens = saved_tokens;
                 return RIN_JSON_C_MALFORMED;
+            }
             value = value * 10u + digit;
             ++reader->offset;
             ++digits;
         }
     }
-    if (digits == 0u) return RIN_JSON_C_MALFORMED;
+    if (digits == 0u) {
+        reader->offset = saved_offset;
+        reader->tokens = saved_tokens;
+        return RIN_JSON_C_MALFORMED;
+    }
     *value_out = value;
     return RIN_JSON_C_OK;
 }
@@ -435,14 +477,30 @@ RinJsonCStatus rin_json_c_read_u32(
 RinJsonCStatus rin_json_c_skip_value(
     RinJsonCReader* reader, RinJsonCSpan* span_out)
 {
+    uint32_t saved_offset;
+    uint32_t saved_tokens;
+    RinJsonCStatus status;
     if (span_out != NULL) *span_out = (RinJsonCSpan){0};
-    return json_skip_value_internal(reader, 0u, span_out);
+    if (reader == NULL) return json_skip_value_internal(NULL, 0u, span_out);
+    saved_offset = reader->offset;
+    saved_tokens = reader->tokens;
+    status = json_skip_value_internal(reader, 0u, span_out);
+    if (status != RIN_JSON_C_OK) {
+        reader->offset = saved_offset;
+        reader->tokens = saved_tokens;
+    }
+    return status;
 }
 
 RinJsonCStatus rin_json_c_document_complete(RinJsonCReader* reader)
 {
+    uint32_t saved_offset;
     if (reader == NULL) return RIN_JSON_C_INVALID_ARGUMENT;
+    saved_offset = reader->offset;
     rin_json_c_skip_space(reader);
-    return reader->offset == reader->length
-        ? RIN_JSON_C_OK : RIN_JSON_C_MALFORMED;
+    if (reader->offset != reader->length) {
+        reader->offset = saved_offset;
+        return RIN_JSON_C_MALFORMED;
+    }
+    return RIN_JSON_C_OK;
 }

@@ -41,30 +41,35 @@ RinJsonCStatus rin_json_c_reader_init(
     uint32_t max_string_bytes);
 
 void rin_json_c_skip_space(RinJsonCReader* reader);
+/* On a missing delimiter, consume restores the reader offset. */
 RinJsonCStatus rin_json_c_consume(RinJsonCReader* reader, char expected);
 
 /* Return the lexical contents between quotes. JSON escapes remain encoded in
  * the returned span, but the complete string and UTF-8/Unicode escape form is
- * validated. On failure span_out is cleared. */
+ * validated. On failure span_out is cleared and the reader offset/token count
+ * are restored, so a caller can retry with a different limit or output. */
 RinJsonCStatus rin_json_c_read_string_span(
     RinJsonCReader* reader, RinJsonCSpan* span_out);
 
 /* Read a canonical printable-ASCII string into caller-owned storage. This is
  * intentionally stricter than JSON: escapes, controls, DEL, and non-ASCII
- * bytes are rejected instead of being decoded into an identity field. */
+ * bytes are rejected instead of being decoded into an identity field. A
+ * capacity or validation failure clears the output and restores the reader
+ * offset/token count. */
 RinJsonCStatus rin_json_c_read_ascii_string(
     RinJsonCReader* reader, char* output, uint32_t capacity,
     uint32_t* bytes_out);
 
 /* Read an unsigned JSON integer with no sign, fraction, exponent, or leading
  * zero. The delimiter remains for the caller's structural parser. On failure
- * value_out is set to zero. */
+ * value_out is set to zero and the reader offset/token count are restored. */
 RinJsonCStatus rin_json_c_read_u32(
     RinJsonCReader* reader, uint32_t* value_out);
 
 /* Validate and consume one complete JSON value, returning its borrowed raw
  * span. Objects and arrays are recursively checked under max_depth and all
- * values/keys count against max_tokens. On failure span_out is cleared. */
+ * values/keys count against max_tokens. On failure span_out is cleared and
+ * the reader offset/token count are restored. */
 RinJsonCStatus rin_json_c_skip_value(
     RinJsonCReader* reader, RinJsonCSpan* span_out);
 
