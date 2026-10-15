@@ -119,6 +119,25 @@ private:
     Storage value_;
 };
 
+/* A bounded, non-throwing parse result. `message` points to a static string
+ * and remains valid for the lifetime of the program. The returned Value is
+ * null on failure. */
+struct ParseError {
+    std::size_t offset = 0u;
+    std::size_t line = 1u;
+    std::size_t column = 1u;
+    const char* message = nullptr;
+};
+
+struct ParseResult {
+    Value value;
+    ParseError error;
+
+    [[nodiscard]] bool succeeded() const noexcept { return error.message == nullptr; }
+};
+
+[[nodiscard]] ParseResult tryParse(std::string_view input,
+                                   const Limits& limits = Limits{});
 [[nodiscard]] Value parse(std::string_view input, const Limits& limits = Limits{});
 /* Validate and emit one complete JSON document without constructing a DOM.
  * Callbacks are invoked in document order and may reject the parse by
