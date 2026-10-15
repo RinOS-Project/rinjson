@@ -536,17 +536,34 @@ public:
     StreamParser(std::string_view input, const StreamCallbacks& callbacks,
                  const Limits& limits)
         : input_(input), callbacks_(callbacks), limits_(limits) {
-        if (input.size() > limits.maxBytes) fail(input_, 0u, "JSON body exceeds limit");
+        if (input.size() > limits.maxBytes)
+            reject(0u, "JSON body exceeds limit");
     }
 
-    void document() {
+    bool document() {
+        if (error_.message != nullptr) return false;
         skip();
-        value(0u);
+        if (!value(0u)) return false;
         skip();
-        if (position_ != input_.size()) fail(input_, position_, "trailing JSON data");
+        if (position_ != input_.size())
+            return reject(position_, "trailing JSON data");
+        return true;
     }
+
+    [[nodiscard]] ParseError error() const noexcept { return error_; }
 
 private:
+    bool reject(std::size_t offset, const char* message) {
+        if (error_.message != nullptr) return false;
+        error_.offset = offset > input_.size() ? input_.size() : offset;
+        for (std::size_t index = 0u; index < error_.offset; ++index) {
+            if (input_[index] == '\n') { ++error_.line; error_.column = 1u; }
+            else ++error_.column;
+        }
+        error_.message = message;
+        return false;
+    }
+
     void skip() {
         while (position_ < input_.size() && (input_[position_] == ' ' ||
                input_[position_] == '\n' || input_[position_] == '\r' ||
@@ -561,25 +578,29 @@ private:
         return false;
     }
 
-    void node() {
+    bool node() {
         if (nodes_ >= limits_.maxTotalNodes)
-            fail(input_, position_, "JSON node count exceeds limit");
+            return reject(position_, "JSON node count exceeds limit");
         ++nodes_;
+        return true;
     }
 
-    void event(bool (*callback)(void*), const char* message) {
+    bool event(bool (*callback)(void*), const char* message) {
         if (!invokeStreamCallback(callback, callbacks_.context))
-            fail(input_, position_, message);
+            return reject(position_, message);
+        return true;
     }
 
-    void boolean(bool value) {
+    bool boolean(bool value) {
         if (!invokeStreamCallback(callbacks_.onBoolean, callbacks_.context, value))
-            fail(input_, position_, "JSON stream callback rejected boolean");
+            return reject(position_, "JSON stream callback rejected boolean");
+        return true;
     }
 
-    void numberEvent(std::string_view token) {
+    bool numberEvent(std::string_view token) {
         if (!invokeStreamCallback(callbacks_.onNumber, callbacks_.context, token))
-            fail(input_, position_, "JSON stream callback rejected number");
+            return reject(position_, "JSON stream callback rejected number");
+        return true;
     }
 
     static std::size_t utf8Bytes(std::string_view input, std::size_t position) {
@@ -615,20 +636,22 @@ private:
         return count;
     }
 
-    std::uint32_t codeUnit() {
+    bool codeUnit(std::uint32_t& output) {
         std::uint32_t result = 0u;
         for (unsigned index = 0u; index < 4u; ++index) {
-            if (position_ == input_.size()) fail(input_, position_, "truncated unicode escape");
+            if (position_ == input_.size())
+                return reject(position_, "truncated unicode escape");
             unsigned digit = 0u;
             if (!hexDigit(input_[position_++], digit))
-                fail(input_, position_ - 1u, "invalid unicode escape");
+                return reject(position_ - 1u, "invalid unicode escape");
             result = (result << 4u) | digit;
         }
-        return result;
+        output = result;
+        return true;
     }
 
-    void string(bool isKey) {
-        if (!consume('"')) fail(input_, position_, "expected JSON string");
+    bool string(bool isKey) {
+        if (!consume('"')) return reject(position_, "expected JSON string");
         const std::size_t tokenStart = position_;
         std::size_t decodedBytes = 0u;
         while (position_ < input_.size()) {
@@ -636,68 +659,76 @@ private:
             if (character == '"') {
                 if (!invokeStreamCallback(callbacks_.onString, callbacks_.context,
                         input_.substr(tokenStart, position_ - tokenStart - 1u), isKey))
-                    fail(input_, position_, "JSON stream callback rejected string");
-                return;
+                    return reject(position_, "JSON stream callback rejected string");
+                return true;
             }
-            if (character < 0x20u) fail(input_, position_ - 1u, "control in JSON string");
+            if (character < 0x20u)
+                return reject(position_ - 1u, "control in JSON string");
             if (character != '\\') {
                 const std::size_t bytes = utf8Bytes(input_, position_ - 1u);
-                if (bytes == 0u) fail(input_, position_ - 1u, "invalid JSON UTF-8");
+                if (bytes == 0u)
+                    return reject(position_ - 1u, "invalid JSON UTF-8");
                 position_ += bytes - 1u;
                 decodedBytes += bytes;
             } else {
-                if (position_ == input_.size()) fail(input_, position_, "truncated JSON escape");
+                if (position_ == input_.size())
+                    return reject(position_, "truncated JSON escape");
                 const char escaped = input_[position_++];
                 if (escaped == 'u') {
-                    const std::uint32_t high = codeUnit();
+                    std::uint32_t high = 0u;
+                    if (!codeUnit(high)) return false;
                     std::uint32_t point = high;
                     if (high >= 0xd800u && high <= 0xdbffu) {
-                        if (position_ + 5u > input_.size() || input_[position_] != '\\' ||
+                        if (input_.size() - position_ < 6u || input_[position_] != '\\' ||
                             input_[position_ + 1u] != 'u')
-                            fail(input_, position_, "unpaired unicode surrogate");
+                            return reject(position_, "unpaired unicode surrogate");
                         position_ += 2u;
-                        const std::uint32_t low = codeUnit();
+                        std::uint32_t low = 0u;
+                        if (!codeUnit(low)) return false;
                         if (low < 0xdc00u || low > 0xdfffu)
-                            fail(input_, position_, "invalid unicode surrogate");
+                            return reject(position_, "invalid unicode surrogate");
                         point = 0x10000u + ((high - 0xd800u) << 10u) + low - 0xdc00u;
                     } else if (high >= 0xdc00u && high <= 0xdfffu) {
-                        fail(input_, position_, "unpaired unicode surrogate");
+                        return reject(position_, "unpaired unicode surrogate");
                     }
                     decodedBytes += point <= 0x7fu ? 1u : point <= 0x7ffu ? 2u :
                                     point <= 0xffffu ? 3u : 4u;
                 } else if (escaped != '"' && escaped != '\\' && escaped != '/' &&
                            escaped != 'b' && escaped != 'f' && escaped != 'n' &&
                            escaped != 'r' && escaped != 't') {
-                    fail(input_, position_ - 1u, "invalid JSON escape");
+                    return reject(position_ - 1u, "invalid JSON escape");
                 } else {
                     ++decodedBytes;
                 }
             }
             if (decodedBytes > limits_.maxStringBytes)
-                fail(input_, position_, "JSON string exceeds limit");
+                return reject(position_, "JSON string exceeds limit");
         }
-        fail(input_, position_, "unterminated JSON string");
+        return reject(position_, "unterminated JSON string");
     }
 
-    void literal(std::string_view word, bool value) {
+    bool literal(std::string_view word, bool value) {
         if (input_.substr(position_, word.size()) != word)
-            fail(input_, position_, "invalid JSON literal");
+            return reject(position_, "invalid JSON literal");
         position_ += word.size();
-        if (word == "null") event(callbacks_.onNull, "JSON stream callback rejected null");
-        else boolean(value);
+        if (word == "null")
+            return event(callbacks_.onNull, "JSON stream callback rejected null");
+        return boolean(value);
     }
 
-    void number() {
+    bool number() {
         const std::size_t start = position_;
         const bool negative = consume('-');
-        if (position_ == input_.size()) fail(input_, position_, "incomplete JSON number");
+        if (position_ == input_.size())
+            return reject(position_, "incomplete JSON number");
         if (input_[position_] == '0') {
             ++position_;
             if (position_ < input_.size() && input_[position_] >= '0' &&
-                input_[position_] <= '9') fail(input_, position_, "leading JSON zero");
+                input_[position_] <= '9')
+                return reject(position_, "leading JSON zero");
         } else {
             if (input_[position_] < '1' || input_[position_] > '9')
-                fail(input_, position_, "invalid JSON number");
+                return reject(position_, "invalid JSON number");
             while (position_ < input_.size() && input_[position_] >= '0' &&
                    input_[position_] <= '9') ++position_;
         }
@@ -705,7 +736,8 @@ private:
         if (consume('.')) {
             floating = true;
             if (position_ == input_.size() || input_[position_] < '0' ||
-                input_[position_] > '9') fail(input_, position_, "fraction has no digits");
+                input_[position_] > '9')
+                return reject(position_, "fraction has no digits");
             while (position_ < input_.size() && input_[position_] >= '0' &&
                    input_[position_] <= '9') ++position_;
         }
@@ -716,7 +748,8 @@ private:
             if (position_ < input_.size() && (input_[position_] == '+' ||
                                               input_[position_] == '-')) ++position_;
             if (position_ == input_.size() || input_[position_] < '0' ||
-                input_[position_] > '9') fail(input_, position_, "exponent has no digits");
+                input_[position_] > '9')
+                return reject(position_, "exponent has no digits");
             while (position_ < input_.size() && input_[position_] >= '0' &&
                    input_[position_] <= '9') ++position_;
         }
@@ -726,88 +759,89 @@ private:
                 std::int64_t result = 0;
                 const auto parsed = std::from_chars(token.data(), token.data() + token.size(), result);
                 if (parsed.ec != std::errc{} || parsed.ptr != token.data() + token.size())
-                    fail(input_, start, "JSON integer out of range");
+                    return reject(start, "JSON integer out of range");
             } else {
                 std::uint64_t result = 0u;
                 const auto parsed = std::from_chars(token.data(), token.data() + token.size(), result);
                 if (parsed.ec != std::errc{} || parsed.ptr != token.data() + token.size())
-                    fail(input_, start, "JSON integer out of range");
+                    return reject(start, "JSON integer out of range");
             }
         } else {
             double result = 0.0;
             const auto parsed = std::from_chars(token.data(), token.data() + token.size(),
                                                 result, std::chars_format::general);
             if (parsed.ec != std::errc{} || parsed.ptr != token.data() + token.size() ||
-                !std::isfinite(result)) fail(input_, start, "invalid JSON number");
+                !std::isfinite(result))
+                return reject(start, "invalid JSON number");
         }
-        numberEvent(token);
+        return numberEvent(token);
     }
 
-    void value(std::size_t depth) {
-        if (depth > limits_.maxDepth) fail(input_, position_, "JSON depth exceeds limit");
+    bool value(std::size_t depth) {
+        if (depth > limits_.maxDepth)
+            return reject(position_, "JSON depth exceeds limit");
         skip();
-        if (position_ == input_.size()) fail(input_, position_, "unexpected JSON end");
-        node();
+        if (position_ == input_.size())
+            return reject(position_, "unexpected JSON end");
+        if (!node()) return false;
         switch (input_[position_]) {
-        case 'n': literal("null", false); break;
-        case 't': literal("true", true); break;
-        case 'f': literal("false", false); break;
-        case '"': string(false); break;
-        case '[': array(depth + 1u); break;
-        case '{': object(depth + 1u); break;
+        case 'n': return literal("null", false);
+        case 't': return literal("true", true);
+        case 'f': return literal("false", false);
+        case '"': return string(false);
+        case '[': return array(depth + 1u);
+        case '{': return object(depth + 1u);
         default:
             if (input_[position_] == '-' || (input_[position_] >= '0' &&
-                                             input_[position_] <= '9')) number();
-            else fail(input_, position_, "invalid JSON value");
+                                             input_[position_] <= '9')) return number();
+            return reject(position_, "invalid JSON value");
         }
     }
 
-    void array(std::size_t depth) {
+    bool array(std::size_t depth) {
         (void)consume('[');
-        event(callbacks_.onArrayStart, "JSON stream callback rejected array start");
+        if (!event(callbacks_.onArrayStart, "JSON stream callback rejected array start"))
+            return false;
         skip();
         if (consume(']')) {
-            event(callbacks_.onArrayEnd, "JSON stream callback rejected array end");
-            return;
+            return event(callbacks_.onArrayEnd, "JSON stream callback rejected array end");
         }
         std::size_t count = 0u;
         for (;;) {
             if (count++ >= limits_.maxArrayElements)
-                fail(input_, position_, "JSON array exceeds limit");
-            value(depth);
+                return reject(position_, "JSON array exceeds limit");
+            if (!value(depth)) return false;
             skip();
             if (consume(']')) {
-                event(callbacks_.onArrayEnd, "JSON stream callback rejected array end");
-                return;
+                return event(callbacks_.onArrayEnd, "JSON stream callback rejected array end");
             }
-            if (!consume(',')) fail(input_, position_, "expected JSON comma");
+            if (!consume(',')) return reject(position_, "expected JSON comma");
             skip();
         }
     }
 
-    void object(std::size_t depth) {
+    bool object(std::size_t depth) {
         (void)consume('{');
-        event(callbacks_.onObjectStart, "JSON stream callback rejected object start");
+        if (!event(callbacks_.onObjectStart, "JSON stream callback rejected object start"))
+            return false;
         skip();
         if (consume('}')) {
-            event(callbacks_.onObjectEnd, "JSON stream callback rejected object end");
-            return;
+            return event(callbacks_.onObjectEnd, "JSON stream callback rejected object end");
         }
         std::size_t count = 0u;
         for (;;) {
             if (count++ >= limits_.maxObjectMembers || position_ >= input_.size() ||
                 input_[position_] != '"')
-                fail(input_, position_, "invalid JSON object member");
-            string(true);
+                return reject(position_, "invalid JSON object member");
+            if (!string(true)) return false;
             skip();
-            if (!consume(':')) fail(input_, position_, "expected JSON colon");
-            value(depth);
+            if (!consume(':')) return reject(position_, "expected JSON colon");
+            if (!value(depth)) return false;
             skip();
             if (consume('}')) {
-                event(callbacks_.onObjectEnd, "JSON stream callback rejected object end");
-                return;
+                return event(callbacks_.onObjectEnd, "JSON stream callback rejected object end");
             }
-            if (!consume(',')) fail(input_, position_, "expected JSON comma");
+            if (!consume(',')) return reject(position_, "expected JSON comma");
             skip();
         }
     }
@@ -817,6 +851,7 @@ private:
     const Limits& limits_;
     std::size_t position_ = 0u;
     std::size_t nodes_ = 0u;
+    ParseError error_;
 };
 
 } // namespace
@@ -929,13 +964,28 @@ Value parse(std::string_view input, const Limits& limits) {
     return value;
 }
 
-bool parseStream(std::string_view input, const StreamCallbacks& callbacks,
-                 const Limits& limits) {
+bool tryParseStream(std::string_view input, const StreamCallbacks& callbacks,
+                    const Limits& limits, ParseError* error) {
+    if (error != nullptr) *error = ParseError{};
     if (limits.maxBytes == 0u || limits.maxDepth == 0u || limits.maxStringBytes == 0u ||
         limits.maxArrayElements == 0u || limits.maxObjectMembers == 0u ||
-        limits.maxTotalNodes == 0u || limits.maxAllocationBytes == 0u)
-        fail(input, 0u, "JSON limit is zero");
-    StreamParser(input, callbacks, limits).document();
+        limits.maxTotalNodes == 0u || limits.maxAllocationBytes == 0u) {
+        if (error != nullptr) error->message = "JSON limit is zero";
+        return false;
+    }
+    StreamParser parser(input, callbacks, limits);
+    if (!parser.document()) {
+        if (error != nullptr) *error = parser.error();
+        return false;
+    }
+    return true;
+}
+
+bool parseStream(std::string_view input, const StreamCallbacks& callbacks,
+                 const Limits& limits) {
+    ParseError error;
+    if (!tryParseStream(input, callbacks, limits, &error))
+        fail(input, error.offset, error.message);
     return true;
 }
 

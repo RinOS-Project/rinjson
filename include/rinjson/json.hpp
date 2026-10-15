@@ -143,7 +143,10 @@ struct ParseResult {
  * Callbacks are invoked in document order and may reject the parse by
  * returning false. Duplicate keys are delivered in input order; callers that
  * need Reject/FirstWins/LastWins semantics must apply that policy in the
- * bounded consumer callback or use parse(). */
+ * bounded consumer callback or use parse(). `tryParseStream` reports malformed
+ * input and callback rejection without throwing or trapping. */
+bool tryParseStream(std::string_view input, const StreamCallbacks& callbacks,
+                    const Limits& limits = Limits{}, ParseError* error = nullptr);
 bool parseStream(std::string_view input, const StreamCallbacks& callbacks,
                  const Limits& limits = Limits{});
 
